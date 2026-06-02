@@ -33,9 +33,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-# Tested against pipecat-ai 0.0.98 — the frame API moves between releases, so we
-# pin a floor at the version this package was verified against.
-dependencies = ["pipecat-ai>=0.0.98"]
+# Verified against the pipecat-ai 0.0.x line (0.0.98–0.0.108). The frame API
+# moves significantly between major lines — pipecat-ai 1.x restructures core and
+# changes frame signatures — so we cap below 1.0 to the range this package was
+# actually tested against. 1.x support is future work.
+dependencies = ["pipecat-ai>=0.0.98,<1.0"]
 
 [project.optional-dependencies]
 # Opt-in fuzzy LLM-classifier layer. The base package stays deterministic and
