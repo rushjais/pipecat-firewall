@@ -1,14 +1,16 @@
 """Frame-pump test harness.
 
 ``pump`` runs a processor inside a minimal real Pipecat pipeline
-(``processor -> sink``) driven by a ``PipelineTask``, so StartFrame/started
-state, queueing, and EndFrame are all handled exactly as in production. It feeds
-the given frames and returns every frame the processor pushed downstream (with
-the framework's own Start/End frames filtered out), so tests can assert on what
-the firewall emitted.
+(``processor -> capture sink``) driven by a ``PipelineTask``, so
+StartFrame/started state, queueing, and EndFrame are all handled exactly as in
+production. It feeds the given frames and returns every frame the processor
+pushed downstream (with the framework's own Start/End frames filtered out), so
+tests can assert on what the firewall emitted.
 
-This is built on Pipecat's own test primitives (``QueuedFrameProcessor``,
-``Pipeline``, ``PipelineTask``) rather than poking processor internals.
+The capture sink is built from *core* Pipecat primitives only
+(``FrameProcessor`` + ``Pipeline``/``PipelineTask``/``PipelineRunner``). It
+deliberately avoids ``pipecat.tests.utils``, which transitively imports optional
+transport/service deps (``websockets``) that aren't part of pipecat-ai core.
 """
 
 from __future__ import annotations
@@ -22,17 +24,25 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.tests.utils import QueuedFrameProcessor
+
+
+class _CaptureSink(FrameProcessor):
+    """Terminal processor that records every downstream frame it receives."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.captured: list[Frame] = []
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if direction == FrameDirection.DOWNSTREAM:
+            self.captured.append(frame)
+        await self.push_frame(frame, direction)
 
 
 async def _pump(processor: FrameProcessor, frames: Sequence[Frame]) -> list[Frame]:
     """Send ``frames`` through ``processor``; return downstream frames it pushed."""
-    received: asyncio.Queue[Frame] = asyncio.Queue()
-    sink = QueuedFrameProcessor(
-        queue=received,
-        queue_direction=FrameDirection.DOWNSTREAM,
-        ignore_start=True,
-    )
+    sink = _CaptureSink()
     pipeline = Pipeline([processor, sink])
     task = PipelineTask(pipeline, params=PipelineParams(), cancel_on_idle_timeout=False)
 
@@ -45,13 +55,7 @@ async def _pump(processor: FrameProcessor, frames: Sequence[Frame]) -> list[Fram
     runner = PipelineRunner()
     await asyncio.gather(runner.run(task), feed())
 
-    out: list[Frame] = []
-    while not received.empty():
-        frame = await received.get()
-        if isinstance(frame, (StartFrame, EndFrame)):
-            continue
-        out.append(frame)
-    return out
+    return [f for f in sink.captured if not isinstance(f, (StartFrame, EndFrame))]
 
 
 @pytest.fixture
